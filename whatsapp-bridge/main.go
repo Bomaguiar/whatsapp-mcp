@@ -408,6 +408,35 @@ func extractMediaInfo(msg *waProto.Message) (mediaType string, filename string, 
 	return "", "", "", nil, nil, nil, 0
 }
 
+// WebhookPayload is sent to the local webhook server on every incoming message
+type WebhookPayload struct {
+	ChatJID    string `json:"chat_jid"`
+	Sender     string `json:"sender"`
+	Message    string `json:"message"`
+	IsFromMe   bool   `json:"is_from_me"`
+	Timestamp  string `json:"timestamp"`
+}
+
+// fireWebhook sends the message to the local webhook server in a non-blocking goroutine
+func fireWebhook(payload WebhookPayload) {
+	webhookURL := os.Getenv("WEBHOOK_URL")
+	if webhookURL == "" {
+		webhookURL = "http://localhost:3000/webhook"
+	}
+	go func() {
+		data, err := json.Marshal(payload)
+		if err != nil {
+			return
+		}
+		resp, err := http.Post(webhookURL, "application/json", bytes.NewBuffer(data))
+		if err != nil {
+			fmt.Printf("[webhook] Failed to reach webhook server: %v\n", err)
+			return
+		}
+		defer resp.Body.Close()
+	}()
+}
+
 // Handle regular incoming messages with media support
 func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *events.Message, logger waLog.Logger) {
 	// Save message to database
@@ -467,6 +496,17 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 		} else if content != "" {
 			fmt.Printf("[%s] %s %s: %s\n", timestamp, direction, sender, content)
 		}
+	}
+
+	// Fire webhook (non-blocking) for every text message
+	if content != "" {
+		fireWebhook(WebhookPayload{
+			ChatJID:   chatJID,
+			Sender:    sender,
+			Message:   content,
+			IsFromMe:  msg.Info.IsFromMe,
+			Timestamp: msg.Info.Timestamp.Format(time.RFC3339),
+		})
 	}
 }
 
