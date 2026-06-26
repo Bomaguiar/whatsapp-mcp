@@ -1,183 +1,313 @@
-# WhatsApp MCP Server
+# WhatsApp MCP Server + Live Bot for Claude Code
 
-This is a Model Context Protocol (MCP) server for WhatsApp.
+A complete WhatsApp integration for Claude Code — read messages, send replies, and run a **live personal assistant bot** from your phone.
 
-With this you can search and read your personal Whatsapp messages (including images, videos, documents, and audio messages), search your contacts and send messages to either individuals or groups. You can also send media files including images, videos, documents, and audio messages.
+Built on the [whatsmeow](https://github.com/tulir/whatsmeow) library, connecting to your personal WhatsApp via the multi-device API. All messages stored locally in SQLite — nothing leaves your machine unless you ask Claude to read or send.
 
-It connects to your **personal WhatsApp account** directly via the Whatsapp web multidevice API (using the [whatsmeow](https://github.com/tulir/whatsmeow) library). All your messages are stored locally in a SQLite database and only sent to an LLM (such as Claude) when the agent accesses them through tools (which you control).
+> Fork of [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp) with added **live message forwarding**, **wake/sleep bot**, and **Claude Code hook integration**.
 
-Here's an example of what you can do when it's connected to Claude.
+## What You Get
 
-![WhatsApp MCP](./example-use.png)
+### MCP Tools (pull-based)
+Ask Claude to interact with your WhatsApp anytime:
+- `search_contacts` — find contacts by name or number
+- `list_chats` / `get_chat` — browse conversations
+- `list_messages` — read messages with filters and context
+- `send_message` — send text to any contact or group
+- `send_file` / `send_audio_message` — send media
+- `download_media` — download images, videos, docs from messages
 
-> To get updates on this and other projects I work on [enter your email here](https://docs.google.com/forms/d/1rTF9wMBTN0vPfzWuQa2BjfGKdKIpTbyeKxhPMcEzgyI/preview)
+### Live Bot (push-based)
+Send commands from your phone and get replies in WhatsApp — no need to open Claude Code:
 
-> *Caution:* as with many MCP servers, the WhatsApp MCP is subject to [the lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/). This means that project injection could lead to private data exfiltration.
+1. Send `wake_bot` to yourself on WhatsApp
+2. Claude replies with a command menu
+3. Send commands, get instant replies
+4. Send `sleep_bot` to deactivate
+
+**Zero tokens while sleeping** — the watcher is a shell script, not an LLM call.
+
+### Command Menu
+```
+🤖 Claude · Personal Assistant
+━━━━━━━━━━━━━━━━━━━━━
+
+💻 Terminal
+! <command> → run on PC
+
+📋 ClickUp
+cu tasks → all open tasks
+cu tasks <project> → filter by project
+cu done <task> → mark as ✅
+cu add <task> in <list> → create new
+
+📅 Calendar
+cal today → today's agenda
+cal week → this week
+cal add <event> → create event
+
+📧 Email
+mail inbox → recent emails
+mail from <name> → from someone
+mail search <subject> → search
+
+🧠 AI
+? <question> → direct answer
+📎 send image/doc → auto-describe
+
+⚙️ System
+@help → this menu
+@memory → what I know this session
+sleep_bot → put me to sleep 💤
+```
+
+> Commands depend on what MCP servers you have connected (ClickUp, Google Calendar, Gmail, etc). Customize the menu in your CLAUDE.md.
+
+## Architecture
+
+```
+┌──────────────┐     ┌──────────────────┐     ┌─────────────┐
+│  Your Phone  │────▶│  Go Bridge       │────▶│  SQLite DB  │
+│  (WhatsApp)  │◀────│  (whatsmeow)     │     │  (messages) │
+└──────────────┘     └───────┬──────────┘     └──────┬──────┘
+                             │ writes                │ reads
+                     ┌───────▼──────────┐     ┌──────▼──────┐
+                     │  incoming.jsonl  │     │  Python MCP │
+                     │  (signal file)   │     │  Server     │
+                     └───────┬──────────┘     └──────┬──────┘
+                             │ polls                 │ tools
+                     ┌───────▼──────────┐     ┌──────▼──────┐
+                     │  watch-messages  │     │  Claude     │
+                     │  (bash hook)     │────▶│  Code       │
+                     └──────────────────┘     └─────────────┘
+```
+
+1. **Go Bridge** receives WhatsApp messages in real-time via whatsmeow
+2. Messages are stored in **SQLite** (for MCP tools to query)
+3. Incoming messages matching the command chat are written to **incoming.jsonl**
+4. **watch-messages.sh** polls the file every 3 seconds
+5. On new message → exits with code 2 → **Claude Code wakes** via asyncRewake hook
+6. Claude processes the command and replies via the MCP `send_message` tool
 
 ## Installation
 
 ### Prerequisites
 
-- Go
-- Python 3.6+
-- Anthropic Claude Desktop app (or Cursor)
-- UV (Python package manager), install with `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- FFmpeg (_optional_) - Only needed for audio messages. If you want to send audio files as playable WhatsApp voice messages, they must be in `.ogg` Opus format. With FFmpeg installed, the MCP server will automatically convert non-Opus audio files. Without FFmpeg, you can still send raw audio files using the `send_file` tool.
+- **Go** 1.21+ — [go.dev/dl](https://go.dev/dl/)
+- **Python** 3.11+ — [python.org](https://www.python.org/)
+- **uv** (Python package manager) — `pip install uv`
+- **Claude Code** desktop app — [claude.ai/code](https://claude.ai/code)
+- **Windows only:** A C compiler (TDM-GCC recommended) — [jmeubank.github.io/tdm-gcc](https://jmeubank.github.io/tdm-gcc/)
+- **FFmpeg** _(optional)_ — only needed for voice message conversion
 
-### Steps
+### Step 1: Clone and Build
 
-1. **Clone this repository**
+```bash
+git clone https://github.com/YOUR_USERNAME/whatsapp-mcp.git
+cd whatsapp-mcp
+```
 
-   ```bash
-   git clone https://github.com/lharries/whatsapp-mcp.git
-   cd whatsapp-mcp
-   ```
+**Build the Go bridge:**
 
-2. **Run the WhatsApp bridge**
+```bash
+cd whatsapp-bridge
 
-   Navigate to the whatsapp-bridge directory and run the Go application:
+# Linux/macOS:
+go run main.go
 
+# Windows (CGO required for SQLite):
+set CGO_ENABLED=1
+go run main.go
+```
+
+Scan the **QR code** with WhatsApp → Settings → Linked Devices → Link a Device.
+
+**Install Python MCP server:**
+
+```bash
+cd ../whatsapp-mcp-server
+uv sync --python python
+```
+
+### Step 2: Configure Claude Code MCP
+
+Add to your Claude Code MCP config:
+
+```json
+{
+  "mcpServers": {
+    "whatsapp": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "/path/to/whatsapp-mcp/whatsapp-mcp-server",
+        "run",
+        "main.py"
+      ]
+    }
+  }
+}
+```
+
+Or add it via CLI:
+```bash
+claude mcp add whatsapp -- uv --directory /path/to/whatsapp-mcp/whatsapp-mcp-server run main.py
+```
+
+### Step 3: Set Up Live Bot (Optional)
+
+To enable the wake/sleep bot with live WhatsApp commands:
+
+#### 3a. Find Your Self-Chat JID
+
+Run the bridge and send yourself a message. Look at the terminal output:
+```
+[2026-06-26 14:04:35] → 266064751554576: test
+```
+
+The sender ID is your LID. Your self-chat JID is `{LID}@lid` (e.g., `266064751554576@lid`).
+
+#### 3b. Set Environment Variables
+
+```bash
+# The JID of your self-chat (command channel)
+export WHATSAPP_COMMAND_CHAT="266064751554576@lid"
+
+# Your phone number for replies (with country code, no +)
+export WHATSAPP_REPLY_NUMBER="351915873259"
+
+# Bridge directory (auto-detected if not set)
+export WHATSAPP_BRIDGE_DIR="/path/to/whatsapp-mcp/whatsapp-bridge"
+```
+
+#### 3c. Add Claude Code Hook
+
+Add this to your `~/.claude/settings.json` under `"hooks"`:
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash /path/to/whatsapp-mcp/watch-messages.sh",
+            "asyncRewake": true,
+            "rewakeMessage": "INCOMING WHATSAPP MESSAGES"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### 3d. Add Bot Instructions to CLAUDE.md
+
+Add the command reference to your project's `CLAUDE.md` so Claude knows how to handle incoming commands. See [CLAUDE.md.example](./CLAUDE.md.example) for a template.
+
+#### 3e. Auto-Approve WhatsApp Tools
+
+Add to your `~/.claude/settings.json` under `"permissions"`:
+
+```json
+{
+  "permissions": {
+    "allow": [
+      "mcp__whatsapp__list_messages",
+      "mcp__whatsapp__list_chats",
+      "mcp__whatsapp__send_message",
+      "mcp__whatsapp__search_contacts",
+      "mcp__whatsapp__get_chat",
+      "mcp__whatsapp__get_contact_chats",
+      "mcp__whatsapp__get_direct_chat_by_contact",
+      "mcp__whatsapp__get_last_interaction",
+      "mcp__whatsapp__get_message_context"
+    ]
+  }
+}
+```
+
+### Step 4: Start Everything
+
+1. **Start the bridge** (keep this terminal open):
    ```bash
    cd whatsapp-bridge
    go run main.go
    ```
 
-   The first time you run it, you will be prompted to scan a QR code. Scan the QR code with your WhatsApp mobile app to authenticate.
+2. **Open Claude Code** — the MCP server and watcher hook start automatically.
 
-   After approximately 20 days, you will might need to re-authenticate.
+3. **Send `wake_bot`** to yourself on WhatsApp — Claude replies with the menu!
 
-3. **Connect to the MCP server**
+## Windows Quick Start
 
-   Copy the below json with the appropriate {{PATH}} values:
+For Windows users, a startup script is included:
 
-   ```json
-   {
-     "mcpServers": {
-       "whatsapp": {
-         "command": "{{PATH_TO_UV}}", // Run `which uv` and place the output here
-         "args": [
-           "--directory",
-           "{{PATH_TO_SRC}}/whatsapp-mcp/whatsapp-mcp-server", // cd into the repo, run `pwd` and enter the output here + "/whatsapp-mcp-server"
-           "run",
-           "main.py"
-         ]
-       }
-     }
-   }
-   ```
+```powershell
+# One-click start:
+.\start-whatsapp-bridge.bat
+```
 
-   For **Claude**, save this as `claude_desktop_config.json` in your Claude Desktop configuration directory at:
+To auto-start on boot: copy `start-whatsapp-bridge.bat` to your Windows Startup folder (`Win+R` → `shell:startup`).
 
-   ```
-   ~/Library/Application Support/Claude/claude_desktop_config.json
-   ```
+## Configuration
 
-   For **Cursor**, save this as `mcp.json` in your Cursor configuration directory at:
+| Environment Variable | Default | Description |
+|---------------------|---------|-------------|
+| `WHATSAPP_COMMAND_CHAT` | _(none — all chats forwarded)_ | JID of the chat to listen for commands |
+| `WHATSAPP_REPLY_NUMBER` | _(none)_ | Phone number to send replies to |
+| `WHATSAPP_BRIDGE_DIR` | _(auto-detected)_ | Path to the whatsapp-bridge directory |
 
-   ```
-   ~/.cursor/mcp.json
-   ```
+## Scheduled Tasks
 
-4. **Restart Claude Desktop / Cursor**
+You can create Claude Code scheduled tasks that use the WhatsApp MCP to send automated reports:
 
-   Open Claude Desktop and you should now see WhatsApp as an available integration.
+```
+Daily school group summary → sends to WhatsApp at 8am
+Weekly payment check → sends to WhatsApp every Monday
+```
 
-   Or restart Cursor.
-
-### Windows Compatibility
-
-If you're running this project on Windows, be aware that `go-sqlite3` requires **CGO to be enabled** in order to compile and work properly. By default, **CGO is disabled on Windows**, so you need to explicitly enable it and have a C compiler installed.
-
-#### Steps to get it working:
-
-1. **Install a C compiler**  
-   We recommend using [MSYS2](https://www.msys2.org/) to install a C compiler for Windows. After installing MSYS2, make sure to add the `ucrt64\bin` folder to your `PATH`.  
-   → A step-by-step guide is available [here](https://code.visualstudio.com/docs/cpp/config-mingw).
-
-2. **Enable CGO and run the app**
-
-   ```bash
-   cd whatsapp-bridge
-   go env -w CGO_ENABLED=1
-   go run main.go
-   ```
-
-Without this setup, you'll likely run into errors like:
-
-> `Binary was compiled with 'CGO_ENABLED=0', go-sqlite3 requires cgo to work.`
-
-## Architecture Overview
-
-This application consists of two main components:
-
-1. **Go WhatsApp Bridge** (`whatsapp-bridge/`): A Go application that connects to WhatsApp's web API, handles authentication via QR code, and stores message history in SQLite. It serves as the bridge between WhatsApp and the MCP server.
-
-2. **Python MCP Server** (`whatsapp-mcp-server/`): A Python server implementing the Model Context Protocol (MCP), which provides standardized tools for Claude to interact with WhatsApp data and send/receive messages.
-
-### Data Storage
-
-- All message history is stored in a SQLite database within the `whatsapp-bridge/store/` directory
-- The database maintains tables for chats and messages
-- Messages are indexed for efficient searching and retrieval
-
-## Usage
-
-Once connected, you can interact with your WhatsApp contacts through Claude, leveraging Claude's AI capabilities in your WhatsApp conversations.
-
-### MCP Tools
-
-Claude can access the following tools to interact with WhatsApp:
-
-- **search_contacts**: Search for contacts by name or phone number
-- **list_messages**: Retrieve messages with optional filters and context
-- **list_chats**: List available chats with metadata
-- **get_chat**: Get information about a specific chat
-- **get_direct_chat_by_contact**: Find a direct chat with a specific contact
-- **get_contact_chats**: List all chats involving a specific contact
-- **get_last_interaction**: Get the most recent message with a contact
-- **get_message_context**: Retrieve context around a specific message
-- **send_message**: Send a WhatsApp message to a specified phone number or group JID
-- **send_file**: Send a file (image, video, raw audio, document) to a specified recipient
-- **send_audio_message**: Send an audio file as a WhatsApp voice message (requires the file to be an .ogg opus file or ffmpeg must be installed)
-- **download_media**: Download media from a WhatsApp message and get the local file path
-
-### Media Handling Features
-
-The MCP server supports both sending and receiving various media types:
-
-#### Media Sending
-
-You can send various media types to your WhatsApp contacts:
-
-- **Images, Videos, Documents**: Use the `send_file` tool to share any supported media type.
-- **Voice Messages**: Use the `send_audio_message` tool to send audio files as playable WhatsApp voice messages.
-  - For optimal compatibility, audio files should be in `.ogg` Opus format.
-  - With FFmpeg installed, the system will automatically convert other audio formats (MP3, WAV, etc.) to the required format.
-  - Without FFmpeg, you can still send raw audio files using the `send_file` tool, but they won't appear as playable voice messages.
-
-#### Media Downloading
-
-By default, just the metadata of the media is stored in the local database. The message will indicate that media was sent. To access this media you need to use the download_media tool which takes the `message_id` and `chat_jid` (which are shown when printing messages containing the meda), this downloads the media and then returns the file path which can be then opened or passed to another tool.
-
-## Technical Details
-
-1. Claude sends requests to the Python MCP server
-2. The MCP server queries the Go bridge for WhatsApp data or directly to the SQLite database
-3. The Go accesses the WhatsApp API and keeps the SQLite database up to date
-4. Data flows back through the chain to Claude
-5. When sending messages, the request flows from Claude through the MCP server to the Go bridge and to WhatsApp
+See the Claude Code [scheduled tasks docs](https://docs.anthropic.com/en/docs/claude-code) for setup.
 
 ## Troubleshooting
 
-- If you encounter permission issues when running uv, you may need to add it to your PATH or use the full path to the executable.
-- Make sure both the Go application and the Python server are running for the integration to work properly.
+### Bridge crashes immediately
+- **Windows:** Make sure CGO is enabled and TDM-GCC is installed
+- Check that the `store/` directory is writable
 
-### Authentication Issues
+### Messages not appearing in incoming.jsonl
+- Verify `WHATSAPP_COMMAND_CHAT` matches your actual self-chat JID
+- Check the bridge terminal output — your LID may differ from your phone number
+- Self-chat messages have `isFromMe=true` — the bridge handles this correctly
 
-- **QR Code Not Displaying**: If the QR code doesn't appear, try restarting the authentication script. If issues persist, check if your terminal supports displaying QR codes.
-- **WhatsApp Already Logged In**: If your session is already active, the Go bridge will automatically reconnect without showing a QR code.
-- **Device Limit Reached**: WhatsApp limits the number of linked devices. If you reach this limit, you'll need to remove an existing device from WhatsApp on your phone (Settings > Linked Devices).
-- **No Messages Loading**: After initial authentication, it can take several minutes for your message history to load, especially if you have many chats.
-- **WhatsApp Out of Sync**: If your WhatsApp messages get out of sync with the bridge, delete both database files (`whatsapp-bridge/store/messages.db` and `whatsapp-bridge/store/whatsapp.db`) and restart the bridge to re-authenticate.
+### Hook doesn't wake Claude
+- Verify `watch-messages.sh` is executable: `chmod +x watch-messages.sh`
+- Check `~/.claude/settings.json` has the `Stop` hook with `asyncRewake: true`
+- Test manually: `echo '{"text":"wake_bot"}' > whatsapp-bridge/incoming.jsonl && bash watch-messages.sh`
 
-For additional Claude Desktop integration troubleshooting, see the [MCP documentation](https://modelcontextprotocol.io/quickstart/server#claude-for-desktop-integration-issues). The documentation includes helpful tips for checking logs and resolving common issues.
+### QR code doesn't appear
+- Delete `store/whatsapp.db` and restart the bridge
+- Check your WhatsApp → Linked Devices — remove old entries if at the limit
+
+### WhatsApp client outdated (405 error)
+- Update whatsmeow: `cd whatsapp-bridge && go get go.mau.fi/whatsmeow@latest && go mod tidy`
+
+## Security
+
+- All messages stored **locally** in SQLite — nothing sent externally
+- The bridge connects via WhatsApp's official multi-device API
+- The watcher script runs locally as a shell process
+- Claude only accesses messages through MCP tools you explicitly approve
+- **Caution:** As with any MCP server, be aware of [the lethal trifecta](https://simonwillison.net/2025/Jun/16/the-lethal-trifecta/) — prompt injection could lead to data exfiltration
+
+## Credits
+
+- Original MCP server by [lharries/whatsapp-mcp](https://github.com/lharries/whatsapp-mcp)
+- WhatsApp API by [whatsmeow](https://github.com/tulir/whatsmeow)
+- Live bot integration by [Bomaguiar](https://github.com/Bomaguiar)
+
+## License
+
+MIT

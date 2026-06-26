@@ -1,0 +1,14 @@
+{
+  "name": "whatsapp-mcp",
+  "description": "WhatsApp integration for Claude Code — read/send messages, search contacts, and run a live personal assistant bot from your phone with wake/sleep activation. Use when the user mentions WhatsApp, wants to read messages, send messages, check chats, or set up a WhatsApp bot.",
+  "version": "1.0.0",
+  "keywords": ["whatsapp", "messaging", "bot", "mcp", "assistant", "channel"],
+  "author": {
+    "name": "Pedro Aguiar (Bomaguiar)",
+    "email": "bomaguiar@gmail.com"
+  },
+  "homepage": "https://github.com/Bomaguiar/whatsapp-mcp",
+  "repository": "https://github.com/Bomaguiar/whatsapp-mcp",
+  "license": "MIT",
+  "skills": "./skills/"
+}

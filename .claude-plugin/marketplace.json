@@ -1,0 +1,17 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "whatsapp-mcp",
+  "description": "WhatsApp MCP integration for Claude Code — read/send messages, search contacts, and run a live personal assistant bot from your phone.",
+  "owner": {
+    "name": "Pedro Aguiar",
+    "email": "bomaguiar@gmail.com",
+    "url": "https://github.com/Bomaguiar"
+  },
+  "plugins": [
+    {
+      "name": "whatsapp-mcp",
+      "description": "WhatsApp integration with MCP tools and live bot — read messages, send replies, search contacts, wake/sleep activation from your phone.",
+      "source": "./plugin"
+    }
+  ]
+}

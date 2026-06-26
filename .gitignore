@@ -1,3 +1,19 @@
 *.db
+*.exe
 claude_desktop_config.json
 whatsapp.log
+
+# Bridge runtime files
+whatsapp-bridge/store/
+whatsapp-bridge/incoming.jsonl
+whatsapp-bridge/incoming.processed
+whatsapp-bridge/bot.state
+whatsapp-bridge/debug_signals.log
+
+# Python
+whatsapp-mcp-server/.venv/
+whatsapp-mcp-server/__pycache__/
+whatsapp-mcp-server/uv.lock
+
+# Backups
+backups/

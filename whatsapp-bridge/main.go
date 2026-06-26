@@ -409,6 +409,32 @@ func extractMediaInfo(msg *waProto.Message) (mediaType string, filename string, 
 }
 
 // Handle regular incoming messages with media support
+func getSignalDir() string {
+	dir := os.Getenv("WHATSAPP_BRIDGE_DIR")
+	if dir != "" {
+		return dir
+	}
+	exe, err := os.Executable()
+	if err == nil {
+		return filepath.Dir(exe)
+	}
+	wd, _ := os.Getwd()
+	return wd
+}
+
+func writeIncomingSignal(chatJID, chatName, sender, content, timestamp string, logger waLog.Logger) {
+	signalPath := filepath.Join(getSignalDir(), "incoming.jsonl")
+	line := fmt.Sprintf(`{"ts":"%s","chat":"%s","name":"%s","sender":"%s","text":"%s"}`,
+		timestamp, chatJID, chatName, sender, strings.ReplaceAll(strings.ReplaceAll(content, `"`, `\"`), "\n", `\n`))
+	f, err := os.OpenFile(signalPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		logger.Warnf("Failed to write incoming signal: %v", err)
+		return
+	}
+	defer f.Close()
+	f.WriteString(line + "\n")
+}
+
 func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *events.Message, logger waLog.Logger) {
 	// Save message to database
 	chatJID := msg.Info.Chat.String()
@@ -466,6 +492,13 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 			fmt.Printf("[%s] %s %s: [%s: %s] %s\n", timestamp, direction, sender, mediaType, filename, content)
 		} else if content != "" {
 			fmt.Printf("[%s] %s %s: %s\n", timestamp, direction, sender, content)
+		}
+
+		// Forward messages to signal file for Claude hooks
+		// Filter by WHATSAPP_COMMAND_CHAT env var (self-chat JID), or forward all if not set
+		commandChat := os.Getenv("WHATSAPP_COMMAND_CHAT")
+		if content != "" && (commandChat == "" || chatJID == commandChat) {
+			writeIncomingSignal(chatJID, name, sender, content, timestamp, logger)
 		}
 	}
 }
